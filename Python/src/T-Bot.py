@@ -404,8 +404,14 @@ class UploadManager:
                 strategy_map['text'].append(item)
 
             elif media_type in ['images', 'videos']:
+                # 旧数据没有推文ID时逐项上传，不能把空ID当作同一条推文。
+                tweet_id = item.get('tweet_id')
+                if not tweet_id:
+                    strategy_map['single'].append(item)
+                    continue
+
                 # 对媒体文件进行分组（媒体数量决定策略）
-                media_count = self._get_media_count_in_tweet(items, item['tweet_id'])
+                media_count = self._get_media_count_in_tweet(items, tweet_id)
 
                 if media_count == 1:
                     strategy_map['single'].append(item)
@@ -418,7 +424,7 @@ class UploadManager:
         """获取同一推文中的媒体项数量"""
         return sum(
             1 for item in all_items
-            if item['tweet_id'] == tweet_id
+            if item.get('tweet_id') == tweet_id
             and item['media_type'] in ['images', 'videos']
             and not item.get('is_uploaded')
         )
@@ -538,7 +544,7 @@ class UploadManager:
 
     def _fallback_to_single_upload(self, items: List[Dict[str, Any]]) -> None:
         """回退为单文件上传策略"""
-        logger.info(f"⏮️ 回退为单文件上传: {items[0]['tweet_id']} ({len(items)}个文件)")
+        logger.info(f"⏮️ 回退为单文件上传: {items[0].get('tweet_id') or '未知'} ({len(items)}个文件)")
 
         for item in items:
             if item.get('is_uploaded'):
@@ -789,22 +795,35 @@ def process_single(json_path: str, download_dir: str = Config.DEFAULT_DOWNLOAD_D
         processor = FileProcessor(json_path, download_dir)
         data = processor.load_data()
 
-        # 1. 按tweet_id分组数据
-        grouped_items = defaultdict(list)
-        for item in data:
-            if 'tweet_id' not in item:
-                logger.error(f"⚠️ 数据项缺少tweet_id: 文件名={item.get('file_name', '未知')}, 跳过")
-                continue
-
-            grouped_items[item['tweet_id']].append(item)
-
         download_manager = DownloadManager()
         upload_manager = UploadManager()
 
-        logger.info(f"📊 检测到 {len(grouped_items)} 个推文分组")
+        # 1. 跳过已发送/不可重试项；旧数据缺少ID时独立处理。
+        grouped_items = defaultdict(list)
+        uploaded_count = unrecoverable_count = legacy_count = 0
+        for index, item in enumerate(data):
+            if item.get('is_uploaded'):
+                uploaded_count += 1
+                continue
+            if upload_manager._has_unrecoverable_error(item):
+                unrecoverable_count += 1
+                continue
+
+            tweet_id = item.get('tweet_id')
+            if tweet_id:
+                group_key = ('tweet', tweet_id)
+            else:
+                group_key = ('legacy', index)
+                legacy_count += 1
+            grouped_items[group_key].append(item)
+
+        logger.info(
+            f"📊 待处理分组: {len(grouped_items)} | 已发送: {uploaded_count} | "
+            f"不可重试: {unrecoverable_count} | 缺少推文ID逐项处理: {legacy_count}"
+        )
 
         # 2. 按分组处理
-        for tweet_id, items in grouped_items.items():
+        for items in grouped_items.values():
             # 2.1 下载组内所有未下载的文件
             for item in items:
                 if not item.get('is_downloaded'):

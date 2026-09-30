@@ -2,6 +2,7 @@ import '../utils/logger';
 import {cleanupLogger} from '../utils/logger';
 import path from 'path';
 import {XAuthClient} from "./utils";
+import {getUserIdentity} from './user-identity';
 import {get} from "lodash";
 import dayjs from 'dayjs';
 import timezone from 'dayjs/plugin/timezone';
@@ -240,7 +241,7 @@ async function fetchTweetPage(
 }
 
 /** 数据处理管道 */
-function processTweets(
+export function processTweets(
     rawTweets: any[],
     followingIds: Set<string>,
     threshold: dayjs.Dayjs,
@@ -251,11 +252,12 @@ function processTweets(
 ) {
     console.log('\n🔧 开始处理原始数据...');
     const counter = {retweets: 0, quotes: 0, nonFollowing: 0, outOfRange: 0};
+    const diagnostics: ParseDiagnostics = {invalid: 0, fields: {}};
     const validTweets: EnrichedTweet[] = [];
 
     rawTweets.forEach((item, index) => {
         // 转换数据
-        const tweet = transformTweet(item);
+        const tweet = transformTweet(item, diagnostics);
         if (!tweet) return;
 
         // 过滤转推
@@ -285,6 +287,14 @@ function processTweets(
         validTweets.push(tweet);
     });
 
+    if (diagnostics.invalid > 0) {
+        const fields = Object.entries(diagnostics.fields).map(([field, count]) => `${field}=${count}`).join(', ');
+        const message = `数据解析失败: ${diagnostics.invalid}/${rawTweets.length} 条; ${fields}`;
+        if (diagnostics.invalid === rawTweets.length) {
+            throw new Error(`所有原始推文均无法解析，停止处理。${message}`);
+        }
+        console.warn(`⚠️ ${message}`);
+    }
     console.log('✅ 数据处理完成');
     console.log(`→ 有效数据: ${validTweets.length}/${rawTweets.length}`);
     return {validTweets, counter};
@@ -342,23 +352,35 @@ function collectNestedReplies(tweets: any[], depth: number):
 }
 
 /** 转换原始推文数据 */
-function transformTweet(item: any): EnrichedTweet | null {
+interface ParseDiagnostics {
+    invalid: number;
+    fields: Record<string, number>;
+}
+
+function transformTweet(item: any, diagnostics: ParseDiagnostics): EnrichedTweet | null {
+    const invalid = (fields: string[]): null => {
+        diagnostics.invalid++;
+        fields.forEach(field => diagnostics.fields[field] = (diagnostics.fields[field] || 0) + 1);
+        return null;
+    };
     try {
         // 关键字段提取
         const userIdStr = get(item, 'tweet.legacy.userIdStr');
-        const screenName = get(item, 'user.legacy.screenName');
+        const {screenName, name} = getUserIdentity(item?.user);
         const createdAt = get(item, 'tweet.legacy.createdAt');
+        const tweetId = get(item, 'tweet.legacy.idStr');
 
-        if (!userIdStr || !screenName || !createdAt) {
-            console.warn('🛑 数据缺失，跳过条目');
-            return null;
+        const missingFields = Object.entries({userIdStr, screenName, createdAt, tweetId})
+            .filter(([, value]) => typeof value !== 'string' || value.trim().length === 0)
+            .map(([field]) => field);
+        if (missingFields.length > 0) {
+            return invalid(missingFields);
         }
 
         // 时间转换
         const beijingTime = convertToBeijingTime(createdAt);
         if (!beijingTime.isValid()) {
-            console.warn('🕒 时间解析失败:', createdAt);
-            return null;
+            return invalid(['invalidCreatedAt']);
         }
         const fullText = get(item, 'tweet.legacy.fullText', '');
         const isRetweet = fullText.startsWith('RT @');
@@ -370,12 +392,12 @@ function transformTweet(item: any): EnrichedTweet | null {
         return {
             user: {
                 screenName,
-                name: get(item, 'user.legacy.name') || '未知用户'
+                name: name || '未知用户'
             },
             images: extractMedia(item, 'photo'),
             videos: extractVideo(item),
             expandUrls: extractUrls(item),
-            tweetUrl: `https://x.com/${screenName}/status/${get(item, 'tweet.legacy.idStr')}`,
+            tweetUrl: `https://x.com/${screenName}/status/${tweetId}`,
             fullText,
             publishTime,
             userIdStr,
@@ -385,7 +407,7 @@ function transformTweet(item: any): EnrichedTweet | null {
 
     } catch (error) {
         console.error('❌ 数据转换异常:', error.message);
-        return null;
+        return invalid(['conversionError']);
     }
 }
 
@@ -502,4 +524,6 @@ export async function main() {
     }
 }
 
-main();
+if (import.meta.main) {
+    main();
+}
