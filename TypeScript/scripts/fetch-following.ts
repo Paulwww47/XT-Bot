@@ -1,6 +1,7 @@
 import '../utils/logger';
 import {cleanupLogger} from '../utils/logger';
 import {XAuthClient} from "./utils";
+import {getUserIdentity} from './user-identity';
 import path from 'path';
 import fs from "fs-extra";
 import {get} from 'lodash';
@@ -96,21 +97,10 @@ export async function processHomeTimeline() {
         console.log(`\n🎉 完成！共获取 ${allUsers.length} 个用户`);
 
         allUsers.unshift(userSelf);
-        console.log(`\n➕ 添加用户自身信息 @${userSelf.legacy?.screenName || screenName}`);
+        console.log(`\n➕ 添加用户自身信息 @${getUserIdentity(userSelf).screenName || screenName}`);
         console.log(`\n🛠️ 开始精简用户数据...`);
 
-        const simplifiedUsers = allUsers.map(user => ({
-            restId: user.restId,
-            legacy: {
-                name: get(user, 'legacy.name', ''),
-                screenName: get(user, 'legacy.screenName', ''),
-                createdAt: get(user, 'legacy.createdAt', ''),
-                description: get(user, 'legacy.description', ''),
-                entities: get(user, 'legacy.entities', {}),
-                profileBannerUrl: get(user, 'legacy.profileBannerUrl', ''),
-                profileImageUrlHttps: get(user, 'legacy.profileImageUrlHttps', '')
-            }
-        }));
+        const simplifiedUsers = allUsers.map(simplifyUser);
 
         console.log(`🔄 按 screenName 进行字典序排序...`);
         simplifiedUsers.sort((a, b) =>
@@ -132,6 +122,22 @@ export async function processHomeTimeline() {
     }
     console.log(`----- ----- ----- ----- fetch-following end ----- ----- ----- -----`);
 
+}
+
+export function simplifyUser(user: any) {
+    const {name, screenName, createdAt} = getUserIdentity(user);
+    return {
+        restId: user.restId,
+        legacy: {
+            name,
+            screenName,
+            createdAt,
+            description: get(user, 'legacy.description', ''),
+            entities: get(user, 'legacy.entities', {}),
+            profileBannerUrl: get(user, 'legacy.profileBannerUrl', ''),
+            profileImageUrlHttps: get(user, 'legacy.profileImageUrlHttps', '')
+        }
+    };
 }
 
 async function shouldFetchNewData() {
@@ -191,4 +197,6 @@ export async function main() {
 }
 
 // 启动执行
-main();
+if (import.meta.main) {
+    main();
+}
