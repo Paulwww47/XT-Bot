@@ -12,19 +12,19 @@ jobs:
       TZ: Asia/Shanghai
     steps:
       - name: Checkout XT-BOT
-        uses: actions/checkout@v3
+        uses: actions/checkout@v7
         with:
           token: ${{ secrets.GH_TOKEN }}
 
       - name: Checkout XT-DATA
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: ${{ github.repository_owner }}/XT-DATA
           token: ${{ secrets.GH_TOKEN }}
           path: data-repo
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v1
+        uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
 
@@ -34,7 +34,7 @@ jobs:
           bun install
 
       - name: Setup Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v7
         with:
           python-version: "3.10"
 
@@ -102,7 +102,7 @@ jobs:
           python Python/utils/encrypt_7z.py "$TARGET_DIRS" "$OUTPUT_7Z" "$ARTIFACT_PASS"
 
       - name: Upload Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: workflow_${{ github.run_id }}
           path: Artifact/
